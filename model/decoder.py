@@ -16,8 +16,8 @@ class Decoder(nn.Module):
         self.k = k
         self.F = F
 
-        onehots_ = torch.tensor(range(F))
-        self.onehots_ = FU.one_hot(onehots_, num_classes=F).to(self.device)
+        onehots_ = torch.tensor(range(F)) # [F]
+        self.onehots_ = FU.one_hot(onehots_, num_classes=F).to(self.device) # [F, F]
 
         self.layer_T = nn.Sequential(nn.Linear(self.feature_dim+self.F,feature_dim), nn.ReLU())
 
@@ -37,11 +37,16 @@ class Decoder(nn.Module):
         A,T,D = state_feat.shape
         assert (T==self.time_steps and D==self.feature_dim)
 
-        onehots_ = self.onehots_.view(self.F,1,1,self.F).repeat(1,A,T,1)
-        onehots_ = onehots_.to(state_feat.device)
+        # layer_R: [F, A, T, D]
         x = state_feat.unsqueeze(0).repeat(self.F,1,1,1)
 
+        # layer_S: [F, F] -> [F, 1, 1, F] -> [F, A, T, F]
+        onehots_ = self.onehots_.view(self.F,1,1,self.F).repeat(1,A,T,1)
+        onehots_ = onehots_.to(state_feat.device)
+        # [F, A, T, D] + [F, A, T, F] -> [F, A, T, D+F] # TODO why???
         x = torch.cat((x,onehots_),dim=-1)
+
+        # layer_T: [F, A, T, D+F] -> [F, A, T, D]
         x = self.layer_T(x)
 
         # padding_mask and batch_mask is set to be opposite to nn.transformer and private encoder.
@@ -49,14 +54,18 @@ class Decoder(nn.Module):
         padding_mask = padding_mask==False
         batch_mask = batch_mask==False
 
+        # [F, A, T, D] -> [F, A, T, D]
         x = self.layer_U(x,batch_mask=batch_mask, padding_mask=padding_mask)
         x = self.layer_V(x,batch_mask=batch_mask, padding_mask=padding_mask)
         
         x = self.layer_W(x,batch_mask=batch_mask, padding_mask=padding_mask)
         x = self.layer_X(x,batch_mask=batch_mask, padding_mask=padding_mask)
 
+        # [F, A, T, D] -> [F, A, T, D] 
         x = self.layer_Y(x)
+        # [F, A, T, D] -> [F, A, T, 6] # TODO z1 [score0 ,score1, score3, ...]
         x = self.layer_Z1(x)
+        # TODO z2 [F, A, T, D] -> [F, A, T, 7] # x y z covx covy covz heading
         x = self.layer_Z2(x)
 
         return x

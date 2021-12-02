@@ -22,10 +22,10 @@ class Encoder(nn.Module):
         # layer A : input -> [A,T,in_feat_dim] / output -> [A,T,D]
         self.layer_A = nn.Sequential(nn.Linear(in_feat_dim,feature_dim), nn.ReLU(), Permute4Batchnorm((0,2,1)),
                             nn.BatchNorm1d(feature_dim), Permute4Batchnorm((0,2,1)))
-        # layer B : input -> [GD,T,in_dynamic_rg_dim] / output -> [GD,T,D]
+        # layer B : input -> [Gd,T,in_dynamic_rg_dim] / output -> [Gd,T,D]
         self.layer_B = nn.Sequential(nn.Linear(in_dynamic_rg_dim,feature_dim), nn.ReLU(), Permute4Batchnorm((0,2,1)),
                             nn.BatchNorm1d(feature_dim), Permute4Batchnorm((0,2,1)))
-        # layer C : input -> [GD,T,in_dynamic_rg_dim] / output -> [GD,T,D]
+        # layer C : input -> [Gs,T,in_static_rg_dim] / output -> [Gs,T,D]
         self.layer_C = nn.Sequential(nn.Linear(in_static_rg_dim,feature_dim), nn.ReLU(), Permute4Batchnorm((0,2,1)),
                             nn.BatchNorm1d(feature_dim), Permute4Batchnorm((0,2,1)))
         # layer D,E,F,G,H,I : input -> [A,T,D] / outpu -> [A,T,D]
@@ -52,9 +52,14 @@ class Encoder(nn.Module):
     def forward(self, state_feat, agent_batch_mask, padding_mask, hidden_mask, 
                     road_feat, roadgraph_valid, traffic_light_feat, traffic_light_valid,
                         agent_rg_mask, agent_traffic_mask):
+        # TODO agent_batch_mask [A, A] padding_mask[A, T] hidden_mask? roadgraph_valid? traffic_light_valid? agent_traffic_mask?
+        # hidden_mask True:not_masked False:masked
         state_feat[hidden_mask==False] = -1
+        # [A, T, in_feat_dim] -> [A, T, D]
         A_ = self.layer_A(state_feat)
+        # [Gd, T, in_dynamic_rg_feat_dim] -> [Gd, T, D]
         B_ = self.layer_B(traffic_light_feat)
+        # [Gs, T, in_static_rg_feat_dim] -> [Gs, T, D]
         C_ = self.layer_C(road_feat)
         
         output,_,_,_ = self.layer_D(A_,agent_batch_mask, padding_mask, hidden_mask)
