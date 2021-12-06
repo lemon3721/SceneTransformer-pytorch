@@ -52,6 +52,19 @@ class Encoder(nn.Module):
     def forward(self, state_feat, agent_batch_mask, padding_mask, hidden_mask, 
                     road_feat, roadgraph_valid, traffic_light_feat, traffic_light_valid,
                         agent_rg_mask, agent_traffic_mask):
+        '''
+        # states_batch [sumN', 91, 9]
+        # agents_batch_mask [sumN', sumN']
+        # states_padding_mask_batch [sumN', 91]
+        # states_hidden_mask_batch [sumN', 91]
+        # roadgraph_feat_batch [bs*GS, 91, 6]
+        # roadgraph_valid_batch [bs*GS, 91]
+        # traffic_light_feat_batch [bs*GD, 91, 3]
+        # traffic_light_valid_batch [bs*GD, 91]
+        # agent_rg_mask [sumN', bs*GS]
+        # agent_traffic_mask [sumN', bs*GD]
+        '''
+
         # TODO agent_batch_mask [A, A] padding_mask[A, T] hidden_mask? roadgraph_valid? traffic_light_valid? agent_traffic_mask?
         # hidden_mask True:not_masked False:masked
         state_feat[hidden_mask==False] = -1

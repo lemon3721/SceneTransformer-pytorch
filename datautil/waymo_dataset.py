@@ -346,124 +346,213 @@ def waymo_collate_fn(batch, GD=16, GS=1400): # GS = max number of static roadgra
 
     for data in batch:
         # State of Agents
+        # stack([128,10,], ...) -> [A, T, D] = [128, 10, 9]
         past_states = np.stack((data['state/past/x'],data['state/past/y'],data['state/past/bbox_yaw'],
                                     data['state/past/velocity_x'],data['state/past/velocity_y'],data['state/past/vel_yaw'],
                                         data['state/past/width'],data['state/past/length'],data['state/past/timestamp_micros']), axis=-1)
+        # [128,10,] -> [A, T] = [128,10,] True/False
         past_states_valid = data['state/past/valid'] > 0.
+
+        # stack([128,1,], ...) -> [A, T, D] = [128, 1, 9]
         current_states = np.stack((data['state/current/x'],data['state/current/y'],data['state/current/bbox_yaw'],
                                     data['state/current/velocity_x'],data['state/current/velocity_y'],data['state/current/vel_yaw'],
                                         data['state/current/width'],data['state/current/length'],data['state/current/timestamp_micros']), axis=-1)
+        # [128,1,] -> [A, T] = [128,1,] True/False
         current_states_valid = data['state/current/valid'] > 0.
+
+        # stack([128,80,], ...) -> [A, T, D] = [128, 80, 9]
         future_states = np.stack((data['state/future/x'],data['state/future/y'],data['state/future/bbox_yaw'],
                                     data['state/future/velocity_x'],data['state/future/velocity_y'],data['state/future/vel_yaw'],
                                         data['state/future/width'],data['state/future/length'],data['state/future/timestamp_micros']), axis=-1)
+        # [128,80,] -> [A, T] = [128,80,] True/False
         future_states_valid = data['state/future/valid'] > 0.
 
+        # [128, 10, 9],[128,1,9] [128,80,9] -> [128, 91, 9]    history:0-9 curr:10 future:11-90
         states_feat = np.concatenate((past_states,current_states,future_states),axis=1)
+        # [128, 10],[128, 1],[128, 80] -> [128, 91] True/False
         states_valid = np.concatenate((past_states_valid,current_states_valid,future_states_valid),axis=1)
-        states_any_mask = np.sum(states_valid,axis=1) > 0
-        states_feat = states_feat[states_any_mask]
 
+        # [128,] True/False
+        states_any_mask = np.sum(states_valid,axis=1) > 0 # all 91 states of the "padding agent" is invalid
+        # [N_valid, 91, 9]
+        states_feat = states_feat[states_any_mask]
+        # [N_valid, 91] True/False
         states_padding_mask = np.concatenate((past_states_valid[states_any_mask],current_states_valid[states_any_mask],future_states_valid[states_any_mask]), axis=1)
         
         # basic_mask = np.zeros((len(states_feat),91)).astype(np.bool_)
+        # [N_valid, 91] True/False
         states_hidden_mask_BP = np.ones((len(states_feat),91)).astype(np.bool_)
-        states_hidden_mask_BP[:,:12] = False
+        # 0-11 is not mask bug? why not :11 ?
+        states_hidden_mask_BP[:,:12] = False 
+
+        # [128, ] -> [N_valid, ]
         sdvidx = np.where(data['state/is_sdc'][states_any_mask] == 1)[0][0]
+        # [N_valid, 91] True/False TODO bug ones?
         states_hidden_mask_CBP = np.zeros((len(states_feat),91)).astype(np.bool_)
+        # TODO 0-11 is not mask, why not :11 ?
         states_hidden_mask_CBP[:,:12] = False
+        # TODO 0-90 is not mask, why not sdvidx-1?
         states_hidden_mask_CBP[sdvidx-1,:] = False
+
+        # [N_valid, 91] TODO bug ones?
         states_hidden_mask_GDP = np.zeros((len(states_feat),91)).astype(np.bool_)
+        # TODO 0-11 is not mask, why not :11 ?
         states_hidden_mask_GDP[:,:12] = False
+        # TODO 90 is not mask, why not sdvidx-1?
         states_hidden_mask_GDP[sdvidx-1,-1] = False
         # states_hidden_mask_CDP = np.zeros((len(states_feat),91)).astype(np.bool_)
 
+        # [] -> [1] -> [2] -> [3]
         num_agents = np.append(num_agents, len(states_feat))
         
         # Static Road Graph
+        # (20000,1) (20000,1) (20000,2) (20000,2) -> (20000, 6)
         roadgraph_feat = np.concatenate((data['roadgraph_samples/id'], data['roadgraph_samples/type'], 
                                             data['roadgraph_samples/xyz'][:,:2], data['roadgraph_samples/dir'][:,:2]), axis=-1)
+        # [20000,1] -> [20000, 1] True/False
         roadgraph_valid = data['roadgraph_samples/valid'] > 0.
         valid_num = roadgraph_valid.sum()
-        if valid_num > GS:
+        if valid_num > GS: #  GS=1400, GD=16,
+            # [N_valid_GS, 6]
             roadgraph_feat = roadgraph_feat[roadgraph_valid[:,0]]
-            spacing = valid_num // GS
+            spacing = valid_num // GS # e.g. 2000 // 1400 = 1  2900 // 1400 = 2 
+            # [N_sample_GS, 6] N_sample_GS > GS
             roadgraph_feat = roadgraph_feat[::spacing, :]
             remove_num = len(roadgraph_feat) - GS
+            # [N_sample_GS] True
             roadgraph_mask2 = np.full(len(roadgraph_feat), True)
             idx_remove = np.random.choice(range(len(roadgraph_feat)), remove_num, replace=False)
+            # [N_sample_GS] True/False, there is GS element is True, N_sample_GS-GS is False
             roadgraph_mask2[idx_remove] = False
+            # [GS, 6]
             roadgraph_feat = roadgraph_feat[roadgraph_mask2]
+            # [GS, 1] True
             roadgraph_valid = np.ones((GS,1)).astype(np.bool_)
         else:
+            # [N_valid_GS, 6],  N_valid_GS < GS
             roadgraph_feat = roadgraph_feat[roadgraph_valid[:,0]]
+            # TODO bug? [N_valid_GS, 6] -> [GS, 6] ??
 
+            # [GS, 1] False
             roadgraph_valid = np.zeros((GS,1)).astype(np.bool_)
+            # [GS, 1] True/False 0:N_valid_GS is True, N_valid_GS:-1 is False
             roadgraph_valid[:valid_num,:] = True
             # (Optional) : construct roadgraph valid
 
+        # [GS, 6]  -> [GS, 1, 6] -> [GS, 91, 6]
         roadgraph_feat = np.repeat(roadgraph_feat[:,np.newaxis,:],91,axis=1)
+        # [GS, 1] -> [GS, 91]
         roadgraph_valid = np.repeat(roadgraph_valid,91,axis=1)
 
         # Dynamic Road Graph
+        # [16, 10] [16, 10] [16, 10] -> [16, 10, 3]
         traffic_light_states_past = np.stack((data['traffic_light_state/past/state'].T,data['traffic_light_state/past/x'].T,data['traffic_light_state/past/y'].T),axis=-1)
+        # [16, 10] True/False
         traffic_light_valid_past = data['traffic_light_state/past/valid'].T > 0.
+        # [16, 1] [16, 1] [16, 1] -> [16, 1, 3]
         traffic_light_states_current = np.stack((data['traffic_light_state/current/state'].T,data['traffic_light_state/current/x'].T,data['traffic_light_state/current/y'].T),axis=-1)
+        # [16, 1] True/False
         traffic_light_valid_current = data['traffic_light_state/current/valid'].T > 0.
+        # [16, 80] [16, 80] [16, 80] -> [16, 80, 3]
         traffic_light_states_future = np.stack((data['traffic_light_state/future/state'].T,data['traffic_light_state/future/x'].T,data['traffic_light_state/future/y'].T),axis=-1)
+        # [16, 80] True/False
         traffic_light_valid_future = data['traffic_light_state/future/valid'].T > 0.
-
+        # [16, 10, 3] [16, 1, 3] [16, 80, 3] -> [16, 91, 3]
         traffic_light_feat = np.concatenate((traffic_light_states_past,traffic_light_states_current,traffic_light_states_future),axis=1)
+        # [16, 10] [16, 1] [16, 80] -> [16, 91]
         traffic_light_valid = np.concatenate((traffic_light_valid_past,traffic_light_valid_current,traffic_light_valid_future),axis=1)
 
-        # Concat across batch
+        # Concat across batch TODO why not concat between batch?
+        # [-1,10,9] [128, 10, 9] -> [bs*128, 10, 9]
         past_states_batch = np.concatenate((past_states_batch, past_states), axis=0)
+        # [-1,10] [128, 10] -> [bs*128, 10]
         past_states_valid_batch = np.concatenate((past_states_valid_batch, past_states_valid), axis=0)
+        # [-1,1,9] [128, 1, 9] -> [bs*128, 1, 9]
         current_states_batch = np.concatenate((current_states_batch, current_states), axis=0)
+        # [-1,1] [128, 1] -> [bs*128, 1]
         current_states_valid_batch = np.concatenate((current_states_valid_batch, current_states_valid), axis=0)
+        # [-1,80,9] [128, 80, 9] -> [bs*128, 80, 9]
         future_states_batch = np.concatenate((future_states_batch, future_states), axis=0)
+        # [-1,80] [128, 80] -> [bs*128, 80]
         future_states_valid_batch = np.concatenate((future_states_valid_batch, future_states_valid), axis=0)
 
+        # [-1, 91, 9] [N_valid, 91, 9] -> [sumN, 91, 9]
         states_batch = np.concatenate((states_batch,states_feat), axis=0)
+        # [-1, 91] [N_valid, 91] -> [sumN, 91]
         states_padding_mask_batch = np.concatenate((states_padding_mask_batch,states_padding_mask), axis=0)
 
+        # [-1, 91] [N_valid, 91] -> [sumN, 91]
         states_hidden_mask_BP_batch = np.concatenate((states_hidden_mask_BP_batch,states_hidden_mask_BP), axis=0)
+        # [-1, 91] [N_valid, 91] -> [sumN, 91]
         states_hidden_mask_CBP_batch = np.concatenate((states_hidden_mask_CBP_batch,states_hidden_mask_CBP), axis=0)
+        # [-1, 91] [N_valid, 91] -> [sumN, 91]
         states_hidden_mask_GDP_batch =np.concatenate((states_hidden_mask_GDP_batch,states_hidden_mask_GDP), axis=0)
 
+        # [-1, 91, 6] [GS, 91, 6] -> [bs*GS, 91, 6]
         roadgraph_feat_batch = np.concatenate((roadgraph_feat_batch, roadgraph_feat), axis=0)
+        # [-1, 91] [GS, 91] -> [bs*GS, 91] 
         roadgraph_valid_batch = np.concatenate((roadgraph_valid_batch, roadgraph_valid), axis=0)
 
+        # [-1, 91, 3] [GD, 91, 3] -> [bs*GD, 91, 3]
         traffic_light_feat_batch = np.concatenate((traffic_light_feat_batch, traffic_light_feat), axis=0)
+        # [-1, 91] [GD, 91] -> [bs*GD, 91]
         traffic_light_valid_batch = np.concatenate((traffic_light_valid_batch, traffic_light_valid), axis=0)
 
+    # num_agents [num1, num2, num3] -> [0, num1, num2, num3] -> [0, num1, num1+num2, num1+num2+num3=sumN]
     num_agents_accum = np.cumsum(np.insert(num_agents,0,0)).astype(np.int64)
+    # [sumN, sumN] 0
     agents_batch_mask = np.zeros((num_agents_accum[-1],num_agents_accum[-1]))
-    agent_rg_mask = np.zeros((num_agents_accum[-1],len(num_agents)*GS))
+    # [sumN, bs*GS] 0
+    agent_rg_mask = np.zeros((num_agents_accum[-1],len(num_agents)*GS)) # bs = len(num_agents)
+    # [sumN, bs*GD] 0
     agent_traffic_mask = np.zeros((num_agents_accum[-1],len(num_agents)*GD))
 
+    # only allow interactive in the same batch: why not create a Batch dimention?????????
     for i in range(len(num_agents)):
-        agents_batch_mask[num_agents_accum[i]:num_agents_accum[i+1], num_agents_accum[i]:num_agents_accum[i+1]] = 1
-        agent_rg_mask[num_agents_accum[i]:num_agents_accum[i+1], GS*i:GS*(i+1)] = 1
-        agent_traffic_mask[num_agents_accum[i]:num_agents_accum[i+1], GD*i:GD*(i+1)] = 1
+        agents_batch_mask[num_agents_accum[i]:num_agents_accum[i+1], num_agents_accum[i]:num_agents_accum[i+1]] = 1 # agents in same batch
+        agent_rg_mask[num_agents_accum[i]:num_agents_accum[i+1], GS*i:GS*(i+1)] = 1 # agent/rg in same batch
+        agent_traffic_mask[num_agents_accum[i]:num_agents_accum[i+1], GD*i:GD*(i+1)] = 1 # agent/traffic in same batch
 
+    # [sumN, 91, 9]
     states_batch = torch.FloatTensor(states_batch)
-    agents_batch_mask = torch.BoolTensor(agents_batch_mask)
-    states_padding_mask_batch = torch.BoolTensor(states_padding_mask_batch)
+    # [sumN, 91]
+    states_padding_mask_batch = torch.BoolTensor(states_padding_mask_batch) # True -> mask or not mask?
+    # [sumN, 91]
     states_hidden_mask_BP_batch = torch.BoolTensor(states_hidden_mask_BP_batch)
+    # [sumN, 91]
     states_hidden_mask_CBP_batch = torch.BoolTensor(states_hidden_mask_CBP_batch)
+    # [sumN, 91]
     states_hidden_mask_GDP_batch = torch.BoolTensor(states_hidden_mask_GDP_batch)
     
+    # [bs*GS, 91, 6]
     roadgraph_feat_batch = torch.FloatTensor(roadgraph_feat_batch)
+    # [bs*GS, 91]
     roadgraph_valid_batch = torch.BoolTensor(roadgraph_valid_batch)
+    # [bs*GD, 91, 3]
     traffic_light_feat_batch = torch.FloatTensor(traffic_light_feat_batch)
+    # [bs*GD, 91]
     traffic_light_valid_batch = torch.BoolTensor(traffic_light_valid_batch)
 
+    # [sumN, sumN]
+    agents_batch_mask = torch.BoolTensor(agents_batch_mask)
+    # [sumN, bs*GS]
     agent_rg_mask = torch.BoolTensor(agent_rg_mask)
+    # [sumN, bs*GD] 0
     agent_traffic_mask = torch.BoolTensor(agent_traffic_mask)
 
     # TODO : agent-rg per batch mask (다른 scene 의 rg 와 agent 끼리 attention = 0  으로 만들기 위함)
-        
+    # states_batch [sumN, 91, 9]    
+    # agents_batch_mask [sumN, sumN]
+    # states_padding_mask_batch [sumN, 91] 
+    # states_hidden_mask_BP_batch [sumN, 91]
+    # states_hidden_mask_CBP_batch [sumN, 91]
+    # states_hidden_mask_GDP_batch [sumN, 91]
+    # roadgraph_feat_batch [bs*GS, 91, 6]
+    # roadgraph_valid_batch [bs*GS, 91]
+    # traffic_light_feat_batch [bs*GD, 91, 3]
+    # traffic_light_valid_batch [bs*GD, 91]
+    # agent_rg_mask [sumN, bs*GS]
+    # agent_traffic_mask [sumN, bs*GD]
     return (states_batch, agents_batch_mask, states_padding_mask_batch, 
                 (states_hidden_mask_BP_batch, states_hidden_mask_CBP_batch, states_hidden_mask_GDP_batch), 
                     roadgraph_feat_batch, roadgraph_valid_batch, traffic_light_feat_batch, traffic_light_valid_batch,

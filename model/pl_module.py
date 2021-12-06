@@ -31,16 +31,40 @@ class SceneTransformer(pl.LightningModule):
     def forward(self, states_batch, agents_batch_mask, states_padding_mask_batch, states_hidden_mask_batch,
                     roadgraph_feat_batch, roadgraph_valid_batch, traffic_light_feat_batch, traffic_light_valid_batch,
                         agent_rg_mask, agent_traffic_mask):
+        '''
+        # states_batch [sumN', 91, 9]
+        # agents_batch_mask [sumN', sumN']
+        # states_padding_mask_batch [sumN', 91]
+        # states_hidden_mask_batch [sumN', 91]
+        # roadgraph_feat_batch [bs*GS, 91, 6]
+        # roadgraph_valid_batch [bs*GS, 91]
+        # traffic_light_feat_batch [bs*GD, 91, 3]
+        # traffic_light_valid_batch [bs*GD, 91]
+        # agent_rg_mask [sumN', bs*GS]
+        # agent_traffic_mask [sumN', bs*GD]
+        '''
 
         encodings,_,_ = self.encoder(states_batch, agents_batch_mask, states_padding_mask_batch, states_hidden_mask_batch,
                                     roadgraph_feat_batch, roadgraph_valid_batch, traffic_light_feat_batch, traffic_light_valid_batch,
                                         agent_rg_mask, agent_traffic_mask)
+        # [F, A, T, 6] 
         decoding = self.decoder(encodings, agents_batch_mask, states_padding_mask_batch)
-        
+        # [F, A, T, 6] -> [A, T, F, 6] 
         return decoding.permute(1,2,0,3)
 
     def training_step(self, batch, batch_idx):
-
+        # states_batch [sumN, 91, 9]    
+        # agents_batch_mask [sumN, sumN]
+        # states_padding_mask_batch [sumN, 91] 
+        # states_hidden_mask_BP_batch [sumN, 91]
+        # states_hidden_mask_CBP_batch [sumN, 91]
+        # states_hidden_mask_GDP_batch [sumN, 91]
+        # roadgraph_feat_batch [bs*GS, 91, 6]
+        # roadgraph_valid_batch [bs*GS, 91]
+        # traffic_light_feat_batch [bs*GD, 91, 3]
+        # traffic_light_valid_batch [bs*GD, 91]
+        # agent_rg_mask [sumN, bs*GS]
+        # agent_traffic_mask [sumN, bs*GD]
         states_batch, agents_batch_mask, states_padding_mask_batch, \
                 (states_hidden_mask_BP, states_hidden_mask_CBP, states_hidden_mask_GDP), \
                     roadgraph_feat_batch, roadgraph_valid_batch, traffic_light_feat_batch, traffic_light_valid_batch, \
@@ -55,29 +79,55 @@ class SceneTransformer(pl.LightningModule):
         #                                                                         agent_rg_mask.to(self.device), agent_traffic_mask.to(self.device)
         
         # TODO : randomly select hidden mask
+        # states_hidden_mask_batch [sumN, 91]
         states_hidden_mask_batch = states_hidden_mask_BP
         
+        # states_padding_mask_batch(sunN, 91) 0:pad 1: not pad,     
+        # states_hidden_mask_batch(sumN, 91) False:not mask  True:mask
+        # [sumN] True/False
         no_nonpad_mask = torch.sum((states_padding_mask_batch*~states_hidden_mask_batch),dim=-1) != 0
+        # states_batch [sumN, 91, 9] -> [sumN', 91, 9]
         states_batch = states_batch[no_nonpad_mask]
+        # agents_batch_mask [sumN, sumN] -> [sumN', sumN']
         agents_batch_mask = agents_batch_mask[no_nonpad_mask][:,no_nonpad_mask]
+        # states_padding_mask_batch [sumN, 91] -> [sumN', 91]
         states_padding_mask_batch = states_padding_mask_batch[no_nonpad_mask]
+        # states_hidden_mask_batch [sumN, 91] -> [sumN', 91]
         states_hidden_mask_batch = states_hidden_mask_batch[no_nonpad_mask]
+        # agent_rg_mask [sumN, bs*GS] -> [sumN', bs*GS]
         agent_rg_mask = agent_rg_mask[no_nonpad_mask]
+        # agent_traffic_mask [sumN, bs*GD] -> [sumN', bs*GD]
         agent_traffic_mask = agent_traffic_mask[no_nonpad_mask]                                                                    
         
         # Predict
+        # states_batch [sumN', 91, 9]
+        # agents_batch_mask [sumN', sumN']
+        # states_padding_mask_batch [sumN', 91]
+        # states_hidden_mask_batch [sumN', 91]
+        # roadgraph_feat_batch [bs*GS, 91, 6]
+        # roadgraph_valid_batch [bs*GS, 91]
+        # traffic_light_feat_batch [bs*GD, 91, 3]
+        # traffic_light_valid_batch [bs*GD, 91]
+        # agent_rg_mask [sumN', bs*GS]
+        # agent_traffic_mask [sumN', bs*GD]
+        # 
+        # -> prediction: [A, T, F, 6] = [sumN', 91, F, 6] 
         prediction = self(states_batch, agents_batch_mask, states_padding_mask_batch, states_hidden_mask_batch, 
                         roadgraph_feat_batch, roadgraph_valid_batch, traffic_light_feat_batch, traffic_light_valid_batch,
                             agent_rg_mask, agent_traffic_mask)
 
         # Calculate Loss
+        # [sumN', 91] * [sumN', 91],  sumN' is all valid but 91 have some invalid element
         to_predict_mask = states_padding_mask_batch*states_hidden_mask_batch
-        
+        # [sumN', 91, in_feat_dim] -> [sumN', 91, 6] x y yaw vx vy vyaw 
         gt = states_batch[:,:,:6][to_predict_mask]
+        # [A, T, F, 6] = [sumN', 91, F, 6] -> [sumN', 91, F, 6]
         prediction = prediction[to_predict_mask]    
         
         Loss = nn.MSELoss(reduction='none')
+        # [sumN', 91, 6] ->bug? unsqueeze(-2).repeat(1,1,F, 1)-> [sumN', 91, F, 6]
         loss_ = Loss(gt.unsqueeze(1).repeat(1,6,1), prediction)
+        # [sumN', 91, F, 6] -> [F, sumN', 91, 6] -> [F, sumN']
         loss_ = torch.min(torch.sum(torch.sum(loss_, dim=0),dim=-1))
 
         return loss_

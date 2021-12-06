@@ -34,6 +34,17 @@ class Decoder(nn.Module):
         self.layer_Z2 = nn.Linear(6,6)  # x, y, bbox_yaw, velocity_x, velocity_y, vel_yaw
 
     def forward(self, state_feat, batch_mask, padding_mask, hidden_mask=None):
+        # states_batch [sumN', 91, 9]
+        # agents_batch_mask [sumN', sumN']
+        # states_padding_mask_batch [sumN', 91]
+        # states_hidden_mask_batch [sumN', 91]
+        # roadgraph_feat_batch [bs*GS, 91, 6]
+        # roadgraph_valid_batch [bs*GS, 91]
+        # traffic_light_feat_batch [bs*GD, 91, 3]
+        # traffic_light_valid_batch [bs*GD, 91]
+        # agent_rg_mask [sumN', bs*GS]
+        # agent_traffic_mask [sumN', bs*GD]
+
         A,T,D = state_feat.shape
         assert (T==self.time_steps and D==self.feature_dim)
 
